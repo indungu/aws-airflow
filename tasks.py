@@ -7,7 +7,7 @@ import os
 from airflow_stack.airflow_stack import get_webserver_service_name, get_webserver_taskdef_family_name, \
     get_scheduler_service_name, get_scheduler_taskdef_family_name, get_worker_service_name, \
     get_worker_taskdef_family_name, get_cluster_name
-from airflow_stack.rds_elasticache_stack import MOUNT_POINT
+from airflow_stack.redis_efs_stack import MOUNT_POINT
 
 
 @task
@@ -18,8 +18,8 @@ def prepare_docker_build(context, env):
         shutil.copy(f, build_dir)
 
 @task
-def deploy_vpc_db(context, env):
-    context.run(f"cdk deploy --require-approval never vpc-{env} airflow-db-{env}")
+def deploy_redis_efs(context, env):
+    context.run(f"cdk deploy --require-approval never redis-efs-{env}")
 
 @task
 def deploy_airflow(context, env, file_system_id):

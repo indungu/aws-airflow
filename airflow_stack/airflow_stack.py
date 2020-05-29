@@ -1,15 +1,13 @@
 from aws_cdk import core, aws_ec2
-from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup
+from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, SubnetType
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
 import aws_cdk.aws_ecs_patterns as ecs_patterns
 from aws_cdk.aws_ssm import StringParameter
 
-from airflow_stack.rds_elasticache_stack import RdsElasticacheEfsStack
+from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
 
-
-DB_PORT = 5432
 AIRFLOW_WORKER_PORT=8793
 REDIS_PORT = 6379
 
@@ -36,22 +34,23 @@ def get_worker_taskdef_family_name(deploy_env):
 
 class AirflowStack(core.Stack):
 
-    def __init__(self, scope: core.Construct, id: str, deploy_env: str, vpc:aws_ec2.Vpc, db_redis_stack: RdsElasticacheEfsStack,
+    def __init__(self, scope: core.Construct, id: str, deploy_env: str, db_redis_stack: RedisEfsStack,
                  config: dict, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         self.config = config
         self.deploy_env = deploy_env
         self.db_port = DB_PORT
+        vpc = Vpc.from_lookup(self, f"vpc-{deploy_env}", vpc_id=config["vpc_id"])
         # cannot map volumes to Fargate task defs yet - so this is done via Boto3 since CDK does not
         # support it yet: https://github.com/aws/containers-roadmap/issues/825
         #self.efs_file_system_id = db_redis_stack.efs_file_system_id
         cluster_name = get_cluster_name(deploy_env)
         self.cluster = ecs.Cluster(self, cluster_name, cluster_name=cluster_name, vpc=vpc)
         pwd_secret = ecs.Secret.from_ssm_parameter(StringParameter.from_secure_string_parameter_attributes(self, f"dbpwd-{deploy_env}",
-                                                                                 version=1, parameter_name="postgres_pwd"))
+                                                                                 version=1, parameter_name=config["dbpwd_secret"]))
         self.secrets = {"POSTGRES_PASSWORD": pwd_secret}
         environment = {"EXECUTOR": "Celery", "POSTGRES_HOST" : db_redis_stack.db_host,
-                       "POSTGRES_PORT": str(self.db_port), "POSTGRES_DB": "airflow", "POSTGRES_USER": self.config["dbadmin"],
+                       "POSTGRES_PORT": str(self.db_port), "POSTGRES_DB": "airflow", "POSTGRES_USER": self.config["dbuser"],
                        "REDIS_HOST": db_redis_stack.redis_host,
                        "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])}
         image_asset = DockerImageAsset(self, "AirflowImage", directory="build",

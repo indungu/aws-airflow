@@ -66,7 +66,6 @@ class AirflowStack(core.Stack):
                                from_port=AIRFLOW_WORKER_PORT, to_port=AIRFLOW_WORKER_PORT)
         redis_sg = SecurityGroup.from_security_group_id(self, id=f"Redis-SG-{deploy_env}",
                                                         security_group_id=db_redis_stack.redis.vpc_security_group_ids[0])
-        bastion_sg = db_redis_stack.bastion.connections.security_groups[0]
         self.web_service_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
         self.web_service_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # scheduler

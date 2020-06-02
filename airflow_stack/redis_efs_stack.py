@@ -1,6 +1,7 @@
 from aws_cdk import core, aws_ec2, aws_efs
 from aws_cdk.aws_ec2 import SecurityGroup, InstanceType, InstanceClass, InstanceSize, AmazonLinuxGeneration, \
-    AmazonLinuxEdition, AmazonLinuxStorage, SubnetType, SubnetSelection, MachineImage, Port, Protocol, Vpc, CfnInstance
+    AmazonLinuxEdition, AmazonLinuxStorage, SubnetType, SubnetSelection, MachineImage, Port, Protocol, Vpc, CfnInstance, \
+    Subnet
 from aws_cdk.aws_efs import PerformanceMode, ThroughputMode
 from aws_cdk.aws_rds import DatabaseInstance
 import aws_cdk.aws_elasticache as elasticache
@@ -26,17 +27,19 @@ class RedisEfsStack(core.Stack):
         redis_subnet_group_name = f"AirflowRedisSubnetGrp-{deploy_env}"
         # Ideally we would use private subnets for Redis
         # but current dev VPC has no private subnets
-        subnet_ids = [s.subnet_id for s in self.vpc.private_subnets] if config.get("use_private_subnets", True) else \
-            [s.subnet_id for s in self.vpc.public_subnets]
-        self.setup_redis(config, deploy_env, redis_subnet_group_name, subnet_ids)
+        private_subnet_ids = config["private_subnet_ids"].split(",")
+        self.setup_redis(config, deploy_env, redis_subnet_group_name, private_subnet_ids)
         file_system_name = f'AirflowEFS-{deploy_env}'
         # default to private subnets unless VPC does not provide one
-        efs_subnet_type = SubnetType.PRIVATE if config.get("use_private_subnets", True) else SubnetType.PUBLIC
+        # See https://github.com/aws/aws-cdk/issues/8301 for availability_zone='Dummy'
+        efs_subnets = [Subnet.from_subnet_attributes(self, id, subnet_id=id, availability_zone="Dummy") for id in
+                       private_subnet_ids]
         self.efs_file_system = aws_efs.FileSystem(self, file_system_name, file_system_name=file_system_name,
                                                   vpc=self.vpc, encrypted=False, performance_mode=PerformanceMode.GENERAL_PURPOSE,
                                                   throughput_mode=ThroughputMode.BURSTING,
-                                                  vpc_subnets=SubnetSelection(subnet_type=efs_subnet_type))
-        self.bastion = self.setup_bastion_access(self.postgres_db, deploy_env, self.redis_sg, subnet_ids[0])
+                                                  vpc_subnets=SubnetSelection(subnets=efs_subnets))
+        self.bastion = self.setup_bastion_access(self.postgres_db, deploy_env, self.redis_sg,
+                                                 config["public_subnet_ids"].split(",")[0])
         self.setup_efs_volume()
 
     def setup_redis(self, config, deploy_env, redis_subnet_group_name, subnet_ids):

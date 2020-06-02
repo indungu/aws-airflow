@@ -1,9 +1,9 @@
 from aws_cdk import core, aws_ec2
-from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, SubnetType
+from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, SubnetType, Subnet
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
-import aws_cdk.aws_ecs_patterns as ecs_patterns
+import aws_cdk.aws_elasticloadbalancingv2 as elbv2
 from aws_cdk.aws_ssm import StringParameter
 
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
@@ -40,12 +40,17 @@ class AirflowStack(core.Stack):
         self.config = config
         self.deploy_env = deploy_env
         self.db_port = DB_PORT
-        vpc = Vpc.from_lookup(self, f"vpc-{deploy_env}", vpc_id=config["vpc_id"])
+        self.vpc = Vpc.from_lookup(self, f"vpc-{deploy_env}", vpc_id=config["vpc_id"])
         # cannot map volumes to Fargate task defs yet - so this is done via Boto3 since CDK does not
         # support it yet: https://github.com/aws/containers-roadmap/issues/825
         #self.efs_file_system_id = db_redis_stack.efs_file_system_id
+        subnet_ids = config["private_subnet_ids"].split(",")
+        self.private_subnets = [Subnet.from_subnet_attributes(self, id, subnet_id=id, availability_zone="Dummy") for id in
+                       subnet_ids]
+        self.public_subnets = [Subnet.from_subnet_attributes(self, id, subnet_id=id, availability_zone="Dummy") for id
+                                in config["public_subnet_ids"].split(",")]
         cluster_name = get_cluster_name(deploy_env)
-        self.cluster = ecs.Cluster(self, cluster_name, cluster_name=cluster_name, vpc=vpc)
+        self.cluster = ecs.Cluster(self, cluster_name, cluster_name=cluster_name, vpc=self.vpc)
         pwd_secret = ecs.Secret.from_ssm_parameter(StringParameter.from_secure_string_parameter_attributes(self, f"dbpwd-{deploy_env}",
                                                                                  version=1, parameter_name=config["dbpwd_secret"]))
         self.secrets = {"POSTGRES_PASSWORD": pwd_secret}
@@ -70,12 +75,11 @@ class AirflowStack(core.Stack):
         self.web_service_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # scheduler
         self.scheduler_service = self.create_scheduler_ecs_service(environment)
-        # worker
-        self.worker_service = self.worker_service(environment)
         self.scheduler_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
         self.scheduler_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
         self.scheduler_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
-
+        # worker
+        self.worker_service = self.worker_service(environment)
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
         self.worker_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
@@ -87,7 +91,7 @@ class AirflowStack(core.Stack):
         self.web_service_sg().connections.allow_to(self.worker_sg(), worker_port_info, 'web service to worker')
 
     def web_service_sg(self):
-        return self.web_service.service.connections.security_groups[0]
+        return self.web_service.connections.security_groups[0]
 
     def scheduler_sg(self):
         return self.scheduler_service.connections.security_groups[0]
@@ -98,26 +102,23 @@ class AirflowStack(core.Stack):
     def airflow_web_service(self, environment):
         service_name = get_webserver_service_name(self.deploy_env)
         family =  get_webserver_taskdef_family_name(self.deploy_env)
-        task_def = ecs.FargateTaskDefinition(self, family, cpu=512, memory_limit_mib=1024, family=family)
-        task_def.add_container(f"WebWorker-{self.deploy_env}", image=self.image, environment=environment,
-                               secrets=self.secrets, logging=ecs.LogDrivers.aws_logs(stream_prefix=family,
-                                                                                     log_retention=RetentionDays.ONE_DAY))
-        task_def.default_container.add_port_mappings(ecs.PortMapping(container_port=8080, host_port=8080,
-                                                                     protocol=Protocol.TCP))
         # we want only 1 instance of the web server so when new versions are deployed max_healthy_percent=100
         # you have to manually stop the current version and then it should start a new version - done by deploy task
-        service = ecs_patterns.ApplicationLoadBalancedFargateService(self, service_name,
-                                                                         cluster=self.cluster,  # Required
-                                                                         service_name=service_name,
-                                                                         platform_version=ecs.FargatePlatformVersion.VERSION1_4,
-                                                                         cpu=512,  # Default is 256
-                                                                         desired_count=1,  # Default is 1
-                                                                         task_definition=task_def,
-                                                                         memory_limit_mib=2048,  # Default is 512
-                                                                         public_load_balancer=True,
-                                                                         max_healthy_percent=100
-                                                                         )
-        service.target_group.configure_health_check(path="/health")
+        # by default it will use private subnets only
+        service = self.create_service(service_name, family, f"WebsvcCont-{self.deploy_env}", environment,
+                                   "webserver",
+                                   desired_count=1, cpu=self.config["cpu"], memory=self.config["memory"],
+                                   max_healthy_percent=100)
+        service.task_definition.default_container.add_port_mappings(ecs.PortMapping(container_port=8080, host_port=8080,
+                                                                     protocol=Protocol.TCP))
+        lb = elbv2.ApplicationLoadBalancer(self, f"airflow-websvc-LB-{self.deploy_env}",
+                                           vpc=self.vpc, internet_facing=True,
+                                           vpc_subnets=SubnetSelection(subnets=self.public_subnets))
+        listener = lb.add_listener("Listener", port=80)
+        target_group = listener.add_targets(f"airflow-websvc-LB-TG-{self.deploy_env}",
+                                             port=8080,
+                                             targets=[service])
+        target_group.configure_health_check(path="/health")
         return service
 
     def worker_service(self, environment):
@@ -136,8 +137,8 @@ class AirflowStack(core.Stack):
                                    desired_count=1, cpu=self.config["cpu"], memory=self.config["memory"],
                                    max_healthy_percent=100)
 
-    def create_service(self, service_name, family, container_name, environment, command, desired_count=1, cpu="512", memory="1024",
-                       max_healthy_percent=200):
+    def create_service(self, service_name, family, container_name, environment, command, desired_count=1,
+                       cpu="512", memory="1024", max_healthy_percent=200):
         worker_task_def = ecs.TaskDefinition(self, family, cpu=cpu, memory_mib=memory,
                                              compatibility=ecs.Compatibility.FARGATE, family=family,
                                              network_mode=ecs.NetworkMode.AWS_VPC)
@@ -150,5 +151,7 @@ class AirflowStack(core.Stack):
         return ecs.FargateService(self, service_name, service_name=service_name,
                                   task_definition=worker_task_def,
                                   cluster=self.cluster, desired_count=desired_count,
-                                  platform_version=ecs.FargatePlatformVersion.VERSION1_4, max_healthy_percent=max_healthy_percent)
+                                  platform_version=ecs.FargatePlatformVersion.VERSION1_4,
+                                  max_healthy_percent=max_healthy_percent,
+                                  vpc_subnets=SubnetSelection(subnets=self.private_subnets))
 

@@ -14,7 +14,7 @@ from airflow_stack.redis_efs_stack import MOUNT_POINT
 def prepare_docker_build(context, env):
     build_dir = "build"
     if not os.path.exists(build_dir): os.mkdir(build_dir)
-    for f in ["Dockerfile", f"conf/{env}/airflow.cfg"]:
+    for f in ["Dockerfile", f"conf/{env}/airflow.cfg", "dags/test_dag.py"]:
         shutil.copy(f, build_dir)
 
 @task
@@ -22,10 +22,11 @@ def deploy_redis_efs(context, env):
     context.run(f"cdk deploy --require-approval never redis-efs-{env}")
 
 @task
-def deploy_airflow(context, env, file_system_id):
+def deploy_airflow(context, env, file_system_id=None):
     prepare_docker_build(context, env)
     context.run(f"cdk deploy --require-approval never airflow-{env}")
-    setup_efs(context, env, file_system_id)
+    if file_system_id:
+        setup_efs(context, env, file_system_id)
 
 @task
 def stop_scheduler_service(context, deploy_env, region="us-east-1"):
@@ -42,20 +43,29 @@ def setup_efs(context, deploy_env, file_system_id, region_name='us-east-1'):
     client = boto3.client('ecs', region_name=region_name)
     services_and_tasks = [
         (get_webserver_service_name(deploy_env), get_webserver_taskdef_family_name(deploy_env)),
-        (get_scheduler_service_name(deploy_env), get_scheduler_taskdef_family_name(deploy_env)),
-        (get_worker_service_name(deploy_env), get_worker_taskdef_family_name(deploy_env)),
+        # (get_scheduler_service_name(deploy_env), get_scheduler_taskdef_family_name(deploy_env)),
+        # (get_worker_service_name(deploy_env), get_worker_taskdef_family_name(deploy_env)),
     ]
     cluster_name = get_cluster_name(deploy_env)
     for service_name, task_family_name in services_and_tasks:
         update_service_task_def_with_efs_volume(client, file_system_id, service_name, task_family_name,
                                                 cluster_name, MOUNT_POINT)
         # the tasks may not update - so stop the task manually so it is restarted with the new updated defn
-        task_arn = client.list_tasks(cluster=cluster_name,
-                                     family=task_family_name,
-                                     desiredStatus='RUNNING')["taskArns"][0]
+        task_arn = wait_for_task_to_be_running(client, cluster_name, task_family_name)
         print(f"Stopping {task_family_name}")
         client.stop_task(cluster=cluster_name, task=task_arn)
 
+
+def wait_for_task_to_be_running(client, cluster_name, task_family_name):
+    time_waited = 0
+    while time_waited < 60:
+        time_waited += 10
+        tasks = client.list_tasks(cluster=cluster_name,
+                             family=task_family_name,
+                             desiredStatus='RUNNING')["taskArns"]
+        if tasks:
+            return tasks[0]
+    raise Exception(f"Timed out waiting for task {task_family_name} to be running")
 
 def update_service_task_def_with_efs_volume(client, file_system_id, service_name, task_family_name,
                                             cluster_name, container_path):

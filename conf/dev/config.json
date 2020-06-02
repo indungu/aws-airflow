@@ -1,6 +1,6 @@
 {
   "account_id" : "",
-  "vpc_id": "",
+  "vpc_id": "vpc-08c8eaf4f0323c66c",
   "rds_endpoint_address": "airflow-database-1.cs3qcy3lego4.us-east-1.rds.amazonaws.com",
   "rds_security_group_id": "sg-0f90e55b42940df94",
   "rds_instance_id": "airflow-database-1",

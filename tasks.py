@@ -1,8 +1,5 @@
-import shutil
-
 import boto3
 from invoke import task
-import os
 
 from airflow_stack.airflow_stack import get_webserver_service_name, get_webserver_taskdef_family_name, \
     get_scheduler_service_name, get_scheduler_taskdef_family_name, get_worker_service_name, \

@@ -9,21 +9,12 @@ from airflow_stack.airflow_stack import get_webserver_service_name, get_webserve
     get_worker_taskdef_family_name, get_cluster_name
 from airflow_stack.redis_efs_stack import MOUNT_POINT
 
-
-@task
-def prepare_docker_build(context, env):
-    build_dir = "build"
-    if not os.path.exists(build_dir): os.mkdir(build_dir)
-    for f in ["Dockerfile", f"conf/{env}/airflow.cfg", "dags/test_dag.py"]:
-        shutil.copy(f, build_dir)
-
 @task
 def deploy_redis_efs(context, env):
     context.run(f"cdk deploy --require-approval never redis-efs-{env}")
 
 @task
 def deploy_airflow(context, env, file_system_id=None):
-    prepare_docker_build(context, env)
     context.run(f"cdk deploy --require-approval never airflow-{env}")
     if file_system_id:
         setup_efs(context, env, file_system_id)

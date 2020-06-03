@@ -1,5 +1,6 @@
 from aws_cdk import core, aws_ec2
 from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, SubnetType, Subnet
+from aws_cdk.aws_ecr import Repository
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
@@ -58,9 +59,8 @@ class AirflowStack(core.Stack):
                        "POSTGRES_PORT": str(self.db_port), "POSTGRES_DB": "airflow", "POSTGRES_USER": self.config["dbuser"],
                        "REDIS_HOST": db_redis_stack.redis_host,
                        "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])}
-        image_asset = DockerImageAsset(self, "AirflowImage", directory="build",
-                                       repository_name=config["ecr_repo_name"])
-        self.image = ecs.ContainerImage.from_docker_image_asset(image_asset)
+        repo = Repository.from_repository_arn(self, f"airflow-repo-{deploy_env}", repository_arn=config["ecr_repo_arn"])
+        self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=config["image_tag"])
         # web server - this initializes the db so must happen first
         self.web_service = self.airflow_web_service(environment)
         # https://github.com/aws/aws-cdk/issues/1654

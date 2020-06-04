@@ -5,12 +5,14 @@ from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
 import aws_cdk.aws_elasticloadbalancingv2 as elbv2
+from aws_cdk.aws_rds import DatabaseInstance
 from aws_cdk.aws_ssm import StringParameter
 
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
 
 AIRFLOW_WORKER_PORT=8793
 REDIS_PORT = 6379
+MSSQL_DB_PORT = 1433
 
 def get_cluster_name(deploy_env):
     return f"AirflowCluster-{deploy_env}"
@@ -61,7 +63,15 @@ class AirflowStack(core.Stack):
                        "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])}
         repo = Repository.from_repository_arn(self, f"airflow-repo-{deploy_env}", repository_arn=config["ecr_repo_arn"])
         self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=config["image_tag"])
-        # web server - this initializes the db so must happen first
+        db_sg = SecurityGroup.from_security_group_id(self, id=f"RDS-SG-{deploy_env}",
+                                                     security_group_id=config["mssql_rds_security_group_id"])
+        mssql_db = DatabaseInstance.from_database_instance_attributes(self, f"airflow-mssqlrds-{deploy_env}",
+                                                                              instance_identifier=config[
+                                                                                  "mssql_rds_instance_id"],
+                                                                              instance_endpoint_address=config[
+                                                                                  "mssql_rds_endpoint_address"],
+                                                                              port=MSSQL_DB_PORT,
+                                                                              security_groups=[db_sg])
         self.web_service = self.airflow_web_service(environment)
         # https://github.com/aws/aws-cdk/issues/1654
         self.web_service_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
@@ -81,6 +91,7 @@ class AirflowStack(core.Stack):
         # worker
         self.worker_service = self.worker_service(environment)
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
+        self.worker_sg().connections.allow_to_default_port(mssql_db, 'allow MSSQL')
         self.worker_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # When you start an airflow worker, airflow starts a tiny web server

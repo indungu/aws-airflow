@@ -7,5 +7,8 @@ aws_cdk.aws_ecs_patterns==1.40.0
 aws_cdk.aws_elasticache==1.40.0
 aws_cdk.aws_efs==1.40.0
 aws_cdk.aws_ssm==1.40.0
+aws_cdk.aws_cloudwatch==1.40.0
+aws_cdk.aws_cloudwatch_actions==1.40.0
+aws_cdk.aws_sns_subscriptions==1.40.0
 boto3==1.13.11
 invoke==1.4.1

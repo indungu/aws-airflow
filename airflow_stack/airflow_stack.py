@@ -1,13 +1,15 @@
-from aws_cdk import core, aws_ec2
-from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, SubnetType, Subnet
+from aws_cdk import core, aws_sns
+from aws_cdk.aws_cloudwatch import ComparisonOperator
+from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, Subnet
 from aws_cdk.aws_ecr import Repository
-from aws_cdk.aws_ecr_assets import DockerImageAsset
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
 import aws_cdk.aws_elasticloadbalancingv2 as elbv2
 from aws_cdk.aws_rds import DatabaseInstance
+from aws_cdk.aws_sns_subscriptions import EmailSubscription
 from aws_cdk.aws_ssm import StringParameter
-
+from aws_cdk.core import Duration
+import aws_cdk.aws_cloudwatch_actions as cw_actions
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
 
 AIRFLOW_WORKER_PORT=8793
@@ -63,15 +65,7 @@ class AirflowStack(core.Stack):
                        "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])}
         repo = Repository.from_repository_arn(self, f"airflow-repo-{deploy_env}", repository_arn=config["ecr_repo_arn"])
         self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=config["image_tag"])
-        db_sg = SecurityGroup.from_security_group_id(self, id=f"RDS-SG-{deploy_env}",
-                                                     security_group_id=config["mssql_rds_security_group_id"])
-        mssql_db = DatabaseInstance.from_database_instance_attributes(self, f"airflow-mssqlrds-{deploy_env}",
-                                                                              instance_identifier=config[
-                                                                                  "mssql_rds_instance_id"],
-                                                                              instance_endpoint_address=config[
-                                                                                  "mssql_rds_endpoint_address"],
-                                                                              port=MSSQL_DB_PORT,
-                                                                              security_groups=[db_sg])
+        mssql_db = self.mssql_db_ref(config, deploy_env)
         self.web_service = self.airflow_web_service(environment)
         # https://github.com/aws/aws-cdk/issues/1654
         self.web_service_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
@@ -89,7 +83,7 @@ class AirflowStack(core.Stack):
         self.scheduler_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
         self.scheduler_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # worker
-        self.worker_service = self.worker_service(environment)
+        self.worker_service = self.create_worker_service(environment)
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
         self.worker_sg().connections.allow_to_default_port(mssql_db, 'allow MSSQL')
         self.worker_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
@@ -100,6 +94,35 @@ class AirflowStack(core.Stack):
         # the port on which the logs are served. It needs to be unused, and open
         # visible from the main web server to connect into the workers.
         self.web_service_sg().connections.allow_to(self.worker_sg(), worker_port_info, 'web service to worker')
+        self.setup_cloudwatch_alarms()
+
+    def setup_cloudwatch_alarms(self):
+        name = f"Airflow-Alarms-{self.deploy_env}"
+        topic = aws_sns.Topic(self, name, topic_name=name)
+        topic.add_subscription(subscription=EmailSubscription(self.config["alarm_email_to"]))
+        self.setup_alarm(f"AirflowWeb-Alarm-{self.deploy_env}", topic, self.web_service)
+        self.setup_alarm(f"AirflowSch-Alarm-{self.deploy_env}", topic, self.scheduler_service)
+        self.setup_alarm(f"AirflowWorker-Alarm-{self.deploy_env}", topic, self.worker_service)
+
+    def setup_alarm(self, id, topic, service):
+        metric = service.metric_cpu_utilization(statistic="SampleCount",
+                                                         period=Duration.minutes(1),
+                                                         label="Running tasks for webserver service")
+        alarm = metric.create_alarm(self, id, threshold=1,
+                                    comparison_operator=ComparisonOperator.LESS_THAN_THRESHOLD, evaluation_periods=2)
+        alarm.add_alarm_action(cw_actions.SnsAction(topic))
+
+    def mssql_db_ref(self, config, deploy_env):
+        db_sg = SecurityGroup.from_security_group_id(self, id=f"RDS-SG-{deploy_env}",
+                                                     security_group_id=config["mssql_rds_security_group_id"])
+        mssql_db = DatabaseInstance.from_database_instance_attributes(self, f"airflow-mssqlrds-{deploy_env}",
+                                                                      instance_identifier=config[
+                                                                          "mssql_rds_instance_id"],
+                                                                      instance_endpoint_address=config[
+                                                                          "mssql_rds_endpoint_address"],
+                                                                      port=MSSQL_DB_PORT,
+                                                                      security_groups=[db_sg])
+        return mssql_db
 
     def web_service_sg(self):
         return self.web_service.connections.security_groups[0]
@@ -117,22 +140,22 @@ class AirflowStack(core.Stack):
         # you have to manually stop the current version and then it should start a new version - done by deploy task
         # by default it will use private subnets only
         service = self.create_service(service_name, family, f"WebsvcCont-{self.deploy_env}", environment,
-                                   "webserver",
-                                   desired_count=1, cpu=self.config["cpu"], memory=self.config["memory"],
-                                   max_healthy_percent=100)
-        service.task_definition.default_container.add_port_mappings(ecs.PortMapping(container_port=8080, host_port=8080,
-                                                                     protocol=Protocol.TCP))
+                                      "webserver", desired_count=1, cpu=self.config["cpu"],
+                                      memory=self.config["memory"], max_healthy_percent=100)
+        service.task_definition.default_container.add_port_mappings(ecs.PortMapping(container_port=8080,
+                                                                                    host_port=8080,
+                                                                                    protocol=Protocol.TCP))
         lb = elbv2.ApplicationLoadBalancer(self, f"airflow-websvc-LB-{self.deploy_env}",
                                            vpc=self.vpc, internet_facing=True,
                                            vpc_subnets=SubnetSelection(subnets=self.public_subnets))
         listener = lb.add_listener("Listener", port=80)
         target_group = listener.add_targets(f"airflow-websvc-LB-TG-{self.deploy_env}",
-                                             port=8080,
-                                             targets=[service])
+                                            port=8080,
+                                            targets=[service])
         target_group.configure_health_check(path="/health")
         return service
 
-    def worker_service(self, environment):
+    def create_worker_service(self, environment):
         family = get_worker_taskdef_family_name(self.deploy_env)
         service_name = get_worker_service_name(self.deploy_env)
         return self.create_service(service_name, family, f"WorkerCont-{self.deploy_env}", environment, "worker",

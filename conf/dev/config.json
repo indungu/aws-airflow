@@ -19,5 +19,6 @@
   "cpu": "512",
   "memory":  "1024",
   "num_airflow_workers": 1,
+  "alarm_email_to": "noodledevs@noodle.com",
   "celery_broker_visibility_timeout": 3600
 }

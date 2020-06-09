@@ -1,3 +1,4 @@
+import boto3
 from aws_cdk import core, aws_sns
 from aws_cdk.aws_certificatemanager import Certificate
 from aws_cdk.aws_cloudwatch import ComparisonOperator
@@ -13,6 +14,7 @@ from aws_cdk.core import Duration
 import aws_cdk.aws_cloudwatch_actions as cw_actions
 
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
+
 
 AIRFLOW_WORKER_PORT=8793
 REDIS_PORT = 6379
@@ -39,6 +41,7 @@ def get_worker_service_name(deploy_env):
 def get_worker_taskdef_family_name(deploy_env):
     return f"AirflowWorkerTaskDef-{deploy_env}"
 
+
 class AirflowStack(core.Stack):
 
     def __init__(self, scope: core.Construct, id: str, deploy_env: str, db_redis_stack: RedisEfsStack,
@@ -47,6 +50,8 @@ class AirflowStack(core.Stack):
         self.config = config
         self.deploy_env = deploy_env
         self.db_port = DB_PORT
+        self.secrets = self.get_ecs_secrets()
+
         self.vpc = Vpc.from_lookup(self, f"vpc-{deploy_env}", vpc_id=config["vpc_id"])
         # cannot map volumes to Fargate task defs yet - so this is done via Boto3 since CDK does not
         # support it yet: https://github.com/aws/containers-roadmap/issues/825
@@ -58,13 +63,11 @@ class AirflowStack(core.Stack):
                                 in config["public_subnet_ids"].split(",")]
         cluster_name = get_cluster_name(deploy_env)
         self.cluster = ecs.Cluster(self, cluster_name, cluster_name=cluster_name, vpc=self.vpc)
-        pwd_secret = ecs.Secret.from_ssm_parameter(StringParameter.from_secure_string_parameter_attributes(self, f"dbpwd-{deploy_env}",
-                                                                                 version=1, parameter_name=config["dbpwd_secret"]))
-        self.secrets = {"POSTGRES_PASSWORD": pwd_secret}
-        environment = {"EXECUTOR": "Celery", "POSTGRES_HOST" : db_redis_stack.db_host,
-                       "POSTGRES_PORT": str(self.db_port), "POSTGRES_DB": "airflow", "POSTGRES_USER": self.config["dbuser"],
-                       "REDIS_HOST": db_redis_stack.redis_host,
-                       "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])}
+        environment = {
+            "EXECUTOR": "Celery",
+            "REDIS_HOST": db_redis_stack.redis_host,
+            "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])
+        }
         repo = Repository.from_repository_arn(self, f"airflow-repo-{deploy_env}", repository_arn=config["ecr_repo_arn"])
         self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=config["image_tag"])
         mssql_db = self.mssql_db_ref(config, deploy_env)
@@ -97,6 +100,27 @@ class AirflowStack(core.Stack):
         # visible from the main web server to connect into the workers.
         self.web_service_sg().connections.allow_to(self.worker_sg(), worker_port_info, 'web service to worker')
         self.setup_cloudwatch_alarms()
+
+    def get_ecs_secrets(self):
+        ssm_client = boto3.client('ssm')
+        params = []
+        args = {'Path': self.config['ssm_prefix']}
+        while True:
+            res = ssm_client.get_parameters_by_path(**args)
+            args['NextToken'] = res.get('NextToken')
+            params += res['Parameters']
+            if not args['NextToken']:
+                break
+
+        secrets = {}
+        for param in params:
+            param_name = param['Name'].split('/')[-1]
+            ssm_param = StringParameter.from_secure_string_parameter_attributes(
+                self, f'SSMParam-{param_name}-{self.deploy_env}', version=param['Version'],
+                parameter_name=param['Name']
+            )
+            secrets[param_name] = ecs.Secret.from_ssm_parameter(ssm_param)
+        return secrets
 
     def setup_cloudwatch_alarms(self):
         name = f"Airflow-Alarms-{self.deploy_env}"

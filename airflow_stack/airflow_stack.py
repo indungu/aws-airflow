@@ -1,6 +1,6 @@
 from aws_cdk import core, aws_sns
 from aws_cdk.aws_cloudwatch import ComparisonOperator
-from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, Subnet
+from aws_cdk.aws_ec2 import Vpc, Port, Protocol, SecurityGroup, SubnetSelection, Subnet, Peer
 from aws_cdk.aws_ecr import Repository
 from aws_cdk.aws_logs import RetentionDays
 import aws_cdk.aws_ecs as ecs
@@ -10,6 +10,7 @@ from aws_cdk.aws_sns_subscriptions import EmailSubscription
 from aws_cdk.aws_ssm import StringParameter
 from aws_cdk.core import Duration
 import aws_cdk.aws_cloudwatch_actions as cw_actions
+
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
 
 AIRFLOW_WORKER_PORT=8793
@@ -145,10 +146,14 @@ class AirflowStack(core.Stack):
         service.task_definition.default_container.add_port_mappings(ecs.PortMapping(container_port=8080,
                                                                                     host_port=8080,
                                                                                     protocol=Protocol.TCP))
+        lb_security_group = SecurityGroup(self, f"AirflowLBSG-{self.deploy_env}", vpc=self.vpc,
+                                          allow_all_outbound=True)
+        lb_security_group.connections.allow_from(Peer.ipv4(self.config["lb_vpn_addresses"]), Port.tcp(80))
         lb = elbv2.ApplicationLoadBalancer(self, f"airflow-websvc-LB-{self.deploy_env}",
                                            vpc=self.vpc, internet_facing=True,
-                                           vpc_subnets=SubnetSelection(subnets=self.public_subnets))
-        listener = lb.add_listener("Listener", port=80)
+                                           vpc_subnets=SubnetSelection(subnets=self.public_subnets),
+                                           security_group=lb_security_group)
+        listener = lb.add_listener("Listener", port=80, open=False)
         target_group = listener.add_targets(f"airflow-websvc-LB-TG-{self.deploy_env}",
                                             port=8080,
                                             targets=[service])

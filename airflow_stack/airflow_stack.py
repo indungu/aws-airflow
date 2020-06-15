@@ -10,7 +10,7 @@ import aws_cdk.aws_elasticloadbalancingv2 as elbv2
 from aws_cdk.aws_rds import DatabaseInstance
 from aws_cdk.aws_sns_subscriptions import EmailSubscription
 from aws_cdk.aws_ssm import StringParameter
-from aws_cdk.core import Duration
+from aws_cdk.core import CfnOutput, Duration
 import aws_cdk.aws_cloudwatch_actions as cw_actions
 
 from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
@@ -184,6 +184,7 @@ class AirflowStack(core.Stack):
                                            vpc=self.vpc, internet_facing=True,
                                            vpc_subnets=SubnetSelection(subnets=self.public_subnets),
                                            security_group=lb_security_group)
+        CfnOutput(self, 'LoadBalancerDNS', value=lb.load_balancer_dns_name)
         listener = lb.add_listener("Listener", port=lb_port, open=False, certificates=certificates)
         target_group = listener.add_targets(f"airflow-websvc-LB-TG-{self.deploy_env}",
                                             port=8080,

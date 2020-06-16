@@ -16,17 +16,26 @@ def deploy_redis_efs(context, env):
 
 @task
 def deploy_airflow(context, env, imageTag=None, file_system_id=None):
-    context.run(f"ENV={env} cdk deploy --context image_tag={imageTag} --require-approval never airflow-{env}")
+    image_tag_option = ""
+    if imageTag:
+        image_tag_option = f"--context image_tag={imageTag}"
+    context.run(f"ENV={env} cdk deploy {image_tag_option} --require-approval never airflow-{env}")
     if file_system_id:
         setup_efs(context, env, file_system_id)
 
 @task
 def stop_scheduler_service(context, deploy_env, region="us-east-1"):
     client = boto3.client("ecs", region_name=region)
-    task_arn = client.list_tasks(cluster=get_cluster_name(deploy_env),
-                                 family=get_scheduler_taskdef_family_name(deploy_env),
+    stop_service_task(client, deploy_env, get_cluster_name(deploy_env),
+                      get_scheduler_taskdef_family_name(deploy_env))
+
+
+def stop_service_task(client, deploy_env, cluster_name, task_family):
+    task_arn = client.list_tasks(cluster=cluster_name,
+                                 family=task_family,
                                  desiredStatus='RUNNING')["taskArns"][0]
     client.stop_task(cluster=get_cluster_name(deploy_env), task=task_arn)
+
 
 # cannot map volumes to Fargate task defs yet - so this is done via Boto3 since CDK does not
  # support it yet: https://github.com/aws/containers-roadmap/issues/825

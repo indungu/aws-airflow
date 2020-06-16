@@ -1,6 +1,7 @@
 {
   "account_id" : "509700436028",
   "vpc_id": "vpc-08c8eaf4f0323c66c",
+  "ssm_prefix": "/airflow/dev",
   "rds_endpoint_address": "dev-dataeng-airflow-pgsql-01.cs3qcy3lego4.us-east-1.rds.amazonaws.com",
   "rds_security_group_id": "sg-0eb98a41bc0de9a08",
   "rds_instance_id": "sg-0eb98a41bc0de9a08",
@@ -16,8 +17,6 @@
   "num_cache_nodes": 1,
   "cache_node_type": "cache.t2.micro",
   "cache_az_mode": "single-az",
-  "dbuser" : "airflow",
-  "dbpwd_secret" : "airflow_db_pwd",
   "cpu": "512",
   "memory":  "1024",
   "num_airflow_workers": 1,

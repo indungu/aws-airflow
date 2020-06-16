@@ -7,12 +7,16 @@ from airflow_stack.airflow_stack import get_webserver_service_name, get_webserve
 from airflow_stack.redis_efs_stack import MOUNT_POINT
 
 @task
+def destroy(context, env):
+    context.run(f'ENV={env} cdk destroy redis-efs-{env} airflow-{env}')
+
+@task
 def deploy_redis_efs(context, env):
-    context.run(f"cdk deploy --require-approval never redis-efs-{env}")
+    context.run(f"ENV={env} cdk deploy --require-approval never redis-efs-{env}")
 
 @task
 def deploy_airflow(context, env, file_system_id=None):
-    context.run(f"cdk deploy --require-approval never airflow-{env}")
+    context.run(f"ENV={env} cdk deploy --require-approval never airflow-{env}")
     if file_system_id:
         setup_efs(context, env, file_system_id)
 

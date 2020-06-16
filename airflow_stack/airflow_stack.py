@@ -167,11 +167,11 @@ class AirflowStack(core.Stack):
         service_name = get_webserver_service_name(self.deploy_env)
         family =  get_webserver_taskdef_family_name(self.deploy_env)
         # we want only 1 instance of the web server so when new versions are deployed max_healthy_percent=100
-        # you have to manually stop the current version and then it should start a new version - done by deploy task
+        # and min_healthy_percent=0 so that it will deploy
         # by default it will use private subnets only
         service = self.create_service(service_name, family, f"WebsvcCont-{self.deploy_env}", environment,
                                       "webserver", desired_count=1, cpu=self.config["cpu"],
-                                      memory=self.config["memory"], max_healthy_percent=100)
+                                      memory=self.config["memory"], max_healthy_percent=100, min_healthy_percent=0)
         service.task_definition.default_container.add_port_mappings(ecs.PortMapping(container_port=8080,
                                                                                     host_port=8080,
                                                                                     protocol=Protocol.TCP))
@@ -207,13 +207,13 @@ class AirflowStack(core.Stack):
         task_family = get_scheduler_taskdef_family_name(self.deploy_env)
         service_name = get_scheduler_service_name(self.deploy_env)
         # we want only 1 instance of the scheduler so when new versions are deployed max_healthy_percent=100
-        # you have to manually stop the current version and then it should start a new version - done by deploy task
+        # and min_healthy_percent=0 so that it will deploy
         return self.create_service(service_name, task_family, f"SchedulerCont-{self.deploy_env}", environment, "scheduler",
                                    desired_count=1, cpu=self.config["cpu"], memory=self.config["memory"],
-                                   max_healthy_percent=100)
+                                   max_healthy_percent=100, min_healthy_percent=0)
 
     def create_service(self, service_name, family, container_name, environment, command, desired_count=1,
-                       cpu="512", memory="1024", max_healthy_percent=200):
+                       cpu="512", memory="1024", max_healthy_percent=200, min_healthy_percent=50):
         worker_task_def = ecs.TaskDefinition(self, family, cpu=cpu, memory_mib=memory,
                                              compatibility=ecs.Compatibility.FARGATE, family=family,
                                              network_mode=ecs.NetworkMode.AWS_VPC)
@@ -228,5 +228,6 @@ class AirflowStack(core.Stack):
                                   cluster=self.cluster, desired_count=desired_count,
                                   platform_version=ecs.FargatePlatformVersion.VERSION1_4,
                                   max_healthy_percent=max_healthy_percent,
+                                  min_healthy_percent=min_healthy_percent,
                                   vpc_subnets=SubnetSelection(subnets=self.private_subnets))
 

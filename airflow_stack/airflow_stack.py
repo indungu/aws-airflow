@@ -69,7 +69,11 @@ class AirflowStack(core.Stack):
             "VISIBILITY_TIMEOUT": str(self.config["celery_broker_visibility_timeout"])
         }
         repo = Repository.from_repository_arn(self, f"airflow-repo-{deploy_env}", repository_arn=config["ecr_repo_arn"])
-        self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=config["image_tag"])
+        image_tag = config["image_tag"]
+        # override with anything passed in via command line
+        if self.node.try_get_context("image_tag"):
+            image_tag = self.node.try_get_context("image_tag")
+        self.image = ecs.ContainerImage.from_ecr_repository(repository=repo, tag=image_tag)
         mssql_db = self.mssql_db_ref(config, deploy_env)
         self.web_service = self.airflow_web_service(environment)
         # https://github.com/aws/aws-cdk/issues/1654
@@ -102,7 +106,7 @@ class AirflowStack(core.Stack):
         self.setup_cloudwatch_alarms()
 
     def get_ecs_secrets(self):
-        ssm_client = boto3.client('ssm')
+        ssm_client = boto3.client('ssm', region_name=self.region)
         params = []
         args = {'Path': self.config['ssm_prefix']}
         while True:

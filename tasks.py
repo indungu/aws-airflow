@@ -15,8 +15,8 @@ def deploy_redis_efs(context, env):
     context.run(f"ENV={env} cdk deploy --require-approval never redis-efs-{env}")
 
 @task
-def deploy_airflow(context, env, file_system_id=None):
-    context.run(f"ENV={env} cdk deploy --require-approval never airflow-{env}")
+def deploy_airflow(context, env, imageTag=None, file_system_id=None):
+    context.run(f"ENV={env} cdk deploy --context image_tag={imageTag} --require-approval never airflow-{env}")
     if file_system_id:
         setup_efs(context, env, file_system_id)
 
@@ -35,8 +35,8 @@ def setup_efs(context, deploy_env, file_system_id, region_name='us-east-1'):
     client = boto3.client('ecs', region_name=region_name)
     services_and_tasks = [
         (get_webserver_service_name(deploy_env), get_webserver_taskdef_family_name(deploy_env)),
-        # (get_scheduler_service_name(deploy_env), get_scheduler_taskdef_family_name(deploy_env)),
-        # (get_worker_service_name(deploy_env), get_worker_taskdef_family_name(deploy_env)),
+        (get_scheduler_service_name(deploy_env), get_scheduler_taskdef_family_name(deploy_env)),
+        (get_worker_service_name(deploy_env), get_worker_taskdef_family_name(deploy_env)),
     ]
     cluster_name = get_cluster_name(deploy_env)
     for service_name, task_family_name in services_and_tasks:

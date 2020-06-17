@@ -1,6 +1,6 @@
 {
-  "account_id" : "509700436028",
-  "vpc_id": "vpc-08c8eaf4f0323c66c",
+  "account_id" : "<account id>",
+  "vpc_id": "<vpc id>",
   "ssm_prefix": "/airflow/qa",
   "rds_endpoint_address": "<postgres airflow rds address>",
   "rds_security_group_id": "<security group airflow rds>",

@@ -14,7 +14,7 @@
   "public_subnet_ids": "subnet-0c6c30aaa3575a7f9,subnet-0b05d8c0e49806697",
   "ecr_repo_arn" : "arn:aws:ecr:us-east-1:509700436028:repository/dev-repo",
   "image_tag": "malt_latest",
-  "deploy-role_arn": "arn:aws:iam::509700436028:role/airflow_deployment_role",
+  "deploy_role_arn": "arn:aws:iam::509700436028:role/airflow_deployment_role",
   "num_cache_nodes": 1,
   "cache_node_type": "cache.t2.micro",
   "cache_az_mode": "single-az",

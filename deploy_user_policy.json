@@ -101,6 +101,11 @@
             ]
         },
         {
+            "Action": "elasticache:*",
+            "Effect": "Allow",
+            "Resource": "*"
+        },
+        {
             "Action": "iam:PassRole",
             "Effect": "Allow",
             "Resource": [

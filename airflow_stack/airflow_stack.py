@@ -13,7 +13,7 @@ from aws_cdk.aws_ssm import StringParameter
 from aws_cdk.core import CfnOutput, Duration
 import aws_cdk.aws_cloudwatch_actions as cw_actions
 
-from airflow_stack.redis_efs_stack import RedisEfsStack, DB_PORT
+from airflow_stack.redis_stack import RedisStack, DB_PORT
 
 
 AIRFLOW_WORKER_PORT=8793
@@ -44,7 +44,7 @@ def get_worker_taskdef_family_name(deploy_env):
 
 class AirflowStack(core.Stack):
 
-    def __init__(self, scope: core.Construct, id: str, deploy_env: str, db_redis_stack: RedisEfsStack,
+    def __init__(self, scope: core.Construct, id: str, deploy_env: str, db_redis_stack: RedisStack,
                  config: dict, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         self.config = config
@@ -55,7 +55,6 @@ class AirflowStack(core.Stack):
         self.vpc = Vpc.from_lookup(self, f"vpc-{deploy_env}", vpc_id=config["vpc_id"])
         # cannot map volumes to Fargate task defs yet - so this is done via Boto3 since CDK does not
         # support it yet: https://github.com/aws/containers-roadmap/issues/825
-        #self.efs_file_system_id = db_redis_stack.efs_file_system_id
         subnet_ids = config["private_subnet_ids"].split(",")
         self.private_subnets = [Subnet.from_subnet_attributes(self, id, subnet_id=id, availability_zone="Dummy") for id in
                        subnet_ids]
@@ -85,18 +84,15 @@ class AirflowStack(core.Stack):
         redis_sg = SecurityGroup.from_security_group_id(self, id=f"Redis-SG-{deploy_env}",
                                                         security_group_id=db_redis_stack.redis.vpc_security_group_ids[0])
         self.web_service_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
-        self.web_service_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # scheduler
         self.scheduler_service = self.create_scheduler_ecs_service(environment)
         self.scheduler_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
         self.scheduler_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
-        self.scheduler_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # worker
         self.worker_service = self.create_worker_service(environment)
         self.worker_sg().connections.allow_to_default_port(db_redis_stack.postgres_db, 'allow PG')
         self.worker_sg().connections.allow_to_default_port(mssql_db, 'allow MSSQL')
         self.worker_sg().connections.allow_to(redis_sg, redis_port_info, 'allow Redis')
-        self.worker_sg().connections.allow_to_default_port(db_redis_stack.efs_file_system)
         # When you start an airflow worker, airflow starts a tiny web server
         # subprocess to serve the workers local log files to the airflow main
         # web server, who then builds pages and sends them to users. This defines

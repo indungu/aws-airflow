@@ -14,7 +14,7 @@
   "public_subnet_ids": "<two public subnets in different AZs comma-separated",
   "ecr_repo_arn" : "<ecr repo to from which to pull docker images>",
   "image_tag": "malt_latest",
-  "deploy-role_arn": "<arn for role used to deploy>",
+  "deploy_role_arn": "<arn for role used to deploy>",
   "num_cache_nodes": 1,
   "cache_node_type": "cache.t2.micro",
   "cache_az_mode": "single-az",
